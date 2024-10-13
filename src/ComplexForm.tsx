@@ -21,14 +21,29 @@ import {
   MultiSelect,
 } from './common/wrapped-mantine';
 
+// グローバルマップのカスタマイズ
+// 間違って null が入ってたら必須エラー
+const errorMap: z.ZodErrorMap = (error, ctx) => {
+  switch (error.code) {
+    case z.ZodIssueCode.invalid_type:
+      if (error.received === 'null') {
+        return { message: 'Required' };
+      }
+      break;
+  }
+  return { message: ctx.defaultError };
+};
+z.setErrorMap(errorMap);
+
 const titleMaxLength = 8;
 const descriptionMaxLength = 20;
 
+// zod のスキーマは初期値を考慮せずに正しい型を書く
 const formSchema = z
   .object({
     title: z.string().max(titleMaxLength).min(1, 'Required'),
     description: z.string().max(descriptionMaxLength),
-    userIdAssingnedTo: z.string().nullable(),
+    userIdAssingnedTo: z.string(),
     userIdVerifiedBy: z.string().nullable(),
     userIdInvolvedArray: z.array(z.string()).min(1, 'Required'),
     startDate: z.date().nullable(),
@@ -71,11 +86,12 @@ function refineUsers({
   return true;
 }
 
-type FormValues = z.infer<typeof formSchema>;
+type ValidFormValues = z.infer<typeof formSchema>;
 
 export default function ComplexForm() {
   const { values, setValues, fieldsChanged, setFieldsChanged, control } =
-    useForm<FormValues>({
+    useForm<SetNullable<ValidFormValues, 'userIdAssingnedTo'>>({
+      // 初期値で null が必要な場合はここでセットする
       initialValues: {
         title: '',
         description: '',
@@ -113,7 +129,25 @@ export default function ComplexForm() {
 
   useEffect(() => {
     if (queryConstTaskDetail.data == null) return;
-    setValues(responseToFormValues(queryConstTaskDetail.data));
+    const d = queryConstTaskDetail.data;
+    setValues({
+      title: d.title,
+      description: d.description ?? '',
+      userIdAssingnedTo:
+        d.user_assingned_to?.id == null
+          ? null
+          : String(d.user_assingned_to?.id),
+      userIdVerifiedBy:
+        d.user_verified_by?.id == null ? null : String(d.user_verified_by?.id),
+      userIdInvolvedArray: d.user_involved_array.map((x) => String(x.id)),
+      startDate:
+        d.start_date == null
+          ? null
+          : dayjs(d.start_date, 'YYYY-MM-DD').toDate(),
+      endDate:
+        d.end_date == null ? null : dayjs(d.end_date, 'YYYY-MM-DD').toDate(),
+      endCondition: d.end_condition ?? '',
+    });
   }, [queryConstTaskDetail.data, setValues]);
 
   const optionUsers = usersToSelectData(allUsers);
@@ -151,12 +185,12 @@ export default function ComplexForm() {
       alert(`Errors:\n${JSON.stringify(fieldsErrors, null, 2)}`);
       return;
     }
-    const payload = formValuesToPayload(values);
+    const payload = formValuesToPayload(values as ValidFormValues);
     alert(`Submit:\n${JSON.stringify(payload, null, 2)}`);
   }, [values, fieldsErrors]);
 
   /** show validation mesasges if isChanged or isSubmitted  */
-  const getErr = (isChanged: boolean, name: keyof FormValues) => {
+  const getErr = (isChanged: boolean, name: keyof ValidFormValues) => {
     return isChanged || isSubmitted
       ? fieldsErrors?.[name]?._errors.join(', ')
       : undefined;
@@ -349,40 +383,11 @@ export default function ComplexForm() {
   );
 }
 
-// API-Form transforms
-function responseToFormValues(response: TaskDetail): FormValues {
-  return {
-    title: response.title,
-    description: response.description ?? '',
-    userIdAssingnedTo:
-      response.user_assingned_to?.id == null
-        ? null
-        : String(response.user_assingned_to?.id),
-    userIdVerifiedBy:
-      response.user_verified_by?.id == null
-        ? null
-        : String(response.user_verified_by?.id),
-    userIdInvolvedArray: response.user_involved_array.map((x) => String(x.id)),
-    startDate:
-      response.start_date == null
-        ? null
-        : dayjs(response.start_date, 'YYYY-MM-DD').toDate(),
-    endDate:
-      response.end_date == null
-        ? null
-        : dayjs(response.end_date, 'YYYY-MM-DD').toDate(),
-    endCondition: response.end_condition ?? '',
-  };
-}
-
-function formValuesToPayload(formValues: FormValues): TaskPatchPayload {
+function formValuesToPayload(formValues: ValidFormValues): TaskPatchPayload {
   return {
     title: formValues.title,
     description: formValues.description || null,
-    user_id_assingned_to:
-      formValues.userIdAssingnedTo == null
-        ? null
-        : Number(formValues.userIdAssingnedTo),
+    user_id_assingned_to: Number(formValues.userIdAssingnedTo),
     user_id_verified_by:
       formValues.userIdVerifiedBy == null
         ? null
@@ -417,3 +422,12 @@ export function useConfirmBeforeUnload(shouldConfirm: boolean) {
     };
   }, [shouldConfirm]);
 }
+
+type SetNullable<
+  TObject extends Record<string, any>,
+  TNullableKeys extends keyof TObject
+> = {
+  [P in keyof TObject]: P extends TNullableKeys
+    ? TObject[P] | null
+    : TObject[P];
+};
